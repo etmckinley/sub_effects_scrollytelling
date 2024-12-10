@@ -1,0 +1,1294 @@
+---
+title: "Stoppage time matters: how substitutions and using all minutes played affect player statistics"
+author: "Eliot McKinley"
+lang: en
+language:
+  en:
+    title-block-author-single: "Author"
+format: 
+  closeread-html:
+    css: msaz.css
+    code-tools: false
+    fig-format: svg
+    toc: false
+    linkcolor: "#2596be"
+editor: 
+  markdown: 
+    wrap: sentence
+---
+
+###  {.page-columns .page-full}
+
+::: {.column-screen style="background-image:url(https://raw.githubusercontent.com/etmckinley/goals_added_wheels/refs/heads/main/late_sub.jpg); background-size: cover; height: 70vh; clip-path: inset(0px 0px 0px 0px);"}
+:::
+
+<figcaption>Philadelphia Union's Tai Baribo replaces Damion Lowe in the 105th minute of expanded game time on May 11, 2024.</figcaption>
+
+\
+
+You might think that determining how much playing time a player receives would be rather straightforward, but it is not.
+
+In soccer statistics there are two camps regarding how to determine how much time a player has spent playing. The first camp ignores stoppage time and <span style="color:#ff5a00">**caps**</span> each half at 45 mins for a total of 90 minutes played. The second camp instead decides that stoppage time is still part of the game and <span style="color:#007bdd">**expands**</span> the minutes played to include that, too. 
+
+The 90 minute absolutists are dominant on most sites you’ll find data such as FBRef, TransferMarkt, Whoscored, or MLSsoccer.com. The argument here is that a soccer game is 90 minutes and any stoppage time in regular time will be exactly accounted for by the ref as added time. 
+
+The stoppage time matters crowd realizes that this is not actually true and also [what about subs](https://medium.com/@balders93/how-much-of-sub-effects-is-to-do-with-the-quality-of-our-data-a74808b34722#.dchbclgbp)? If a player has been <span style="color:#f0be3d">**substituted**</span> into the game in the 90th minute should they only get credit for one minute of playing time even though there is more time played?
+
+American Soccer Analysis has long been part of the stoppage time matters movement. This is why you will see that the minutes played per player you find on the interactive tables is always higher than what you will see at other data sources. Additionally, you will always see stats normalized to the <span style="color:#007bdd">**expanded** *per 96 minute*</span>  basis, assuming that games will, on average, have 6 minutes of stoppage time in the first and second halves. 
+
+There are many differences that can arise from using one way or the other to count minutes played and substitution effects. These have been chronicled multiple times, most recently by [Michael Caley](https://www.expectinggoals.com/p/substitute-effects-study-part-i), but there is still ground to be covered exploring this further. 
+
+:::: {.cr-section layout="overlay-center"}
+::: {#cr-games_plot}
+## MLS games are getting longer
+
+Back in the mists of history, it was determined that an average soccer game was 96 minutes long including stoppage. However, that has changed over time in MLS, especially recently.
+
+```{r}
+#| label: games_plot
+#| fig-height: 4
+#| warning: false
+library(tidyverse)
+library(ggtext)
+library(MetBrewer)
+
+source("/Users/etmckinley/Library/CloudStorage/GoogleDrive-etmckinley@gmail.com/My Drive/R Projects/ASA DB/Functions/theme_gplus.r")
+
+gameinfo = readRDS("/Users/etmckinley/Library/CloudStorage/GoogleDrive-etmckinley@gmail.com/My Drive/R Projects/ASA DB/Articles/expanded mins and subs/gameinfo.rds")
+
+games_time=
+  gameinfo %>% 
+  filter(stage_name %in% c("MLS is Back Group Stage", "Regular Season")) %>% 
+  filter(expanded_minutes >80, expanded_minutes<120) %>% 
+  group_by(season_id) %>% 
+  summarise(oneten= sum(expanded_minutes >=110),
+            expanded_minutes = round(mean(expanded_minutes)))
+
+gameinfo %>% 
+  filter(stage_name %in% c("MLS is Back Group Stage", "Regular Season")) %>% 
+  filter(expanded_minutes >80, expanded_minutes<120) %>% 
+  ggplot(aes(x=factor(season_id), y = expanded_minutes))+
+  geom_jitter(width=0.3, height=0, alpha=0.05)+
+  #stat_summary(fun.data=mean_cl_boot, color = "dodgerblue")+
+  geom_label(data = games_time, aes(label = paste0(expanded_minutes, "'")), color = 'dodgerblue',fill="white", alpha=0.8, size=6, fontface="bold", family = "Saira Condensed" )+
+  scale_y_continuous(limits = c(90,118), labels = function(x) paste0(x, "'"))+
+  theme_gplus_saira_light()+
+  theme(text = element_text(size=12),
+        plot.title = element_text(size=16),
+        panel.grid.major.x = element_blank())+
+  labs(x="", 
+       y = "Total Game Length",
+       title = "MLS games are getting longer",
+       subtitle = "Total game time including first and second half stoppage time")
+
+```
+
+:::
+
+Each dot is a single MLS regular season game @cr-games_plot
+
+From 2013-2017, the average game was 97 minutes long [@cr-games_plot]{pan-to="55%,-35%" scale-by="2"}
+
+VAR was implemented halfway through the 2017 season @cr-games_plot
+
+Since the first full season with VAR in 2018, games are getting progressively longer [@cr-games_plot]{pan-to="-35%,-35%" scale-by="1.5"}
+
+Between 2013 and 2022 there were 2 games that were at least 110 minutes long @cr-games_plot
+
+In 2023 and 2024 there were 23 games that were at least 110 minutes long @cr-games_plot
+
+::::
+
+## The gap between capped and expanded minutes is increasing
+
+:::: {.cr-section layout="sidebar-left"}
+::: {#cr-total_mins}
+```{r total_mins}
+#| output: 'asis'
+#| fig-width: 6
+#| fig-height: 8
+#| warning: false
+#| echo: false
+library(ggtext)
+
+
+lineups= readRDS("/Users/etmckinley/Library/CloudStorage/GoogleDrive-etmckinley@gmail.com/My Drive/R Projects/ASA DB/Articles/expanded mins and subs/lineups.rds")
+
+season_time_difference = lineups %>% 
+  filter(! is.na(expanded_minutes_played)) %>% 
+  left_join(gameinfo, by = "game_id") %>% 
+  filter(stage_name %in% c("MLS is Back Group Stage", "Regular Season")) %>% 
+  group_by(season_id) %>% 
+  summarise(mins = sum(minutes_played, na.rm=T),
+            expanded_mins = sum(expanded_minutes_played, na.rm=T)) %>% 
+  mutate(perc_diff = (expanded_mins/mins -1),
+         perc_format = scales::percent(perc_diff, accuracy =0.1)) %>% 
+  group_by(season_id)
+
+season_time_difference %>% 
+  pivot_longer(ends_with("mins")) %>% 
+  group_by(season_id) %>% 
+  mutate(perc_format_loc = mean(value)) %>% 
+  ggplot(aes(x=value, y = season_id))+
+  geom_segment(data = season_time_difference, aes(x = mins, xend = expanded_mins))+
+  geom_point(aes(color = name), size=4)+
+  geom_text(aes(x= perc_format_loc, label = perc_format), size=6, nudge_y = 0.3, fontface="bold", family="Saira Condensed")+
+  scale_y_reverse(breaks = c(2013:2024))+
+  scale_x_continuous(breaks =c(600000, 800000, 1000000), labels = scales::label_number(scale = 1/1000, suffix = "k"))+
+  scale_color_manual(values = c("#007bdd", "#ff5a00"))+
+  theme_gplus_saira_light()+
+  labs(y="", x = "Total minutes played by all players in a season",
+       title='The difference between <span style="color:#ff5a00">**capped minutes**</span> and<br><span style="color:#007bdd">**expanded minutes**</span> is increasing')+
+  theme(plot.title = element_markdown(),
+        legend.position = "none",
+        panel.grid.major.x = element_blank())
+```
+:::
+
+In 2013-2017, before the introduction of VAR, the difference between <span style="color:#ff5a00">**capped minutes**</span> and<br><span style="color:#007bdd">**expanded minutes**</span> was around **8%** @cr-total_mins
+
+Aside from the 2020 COVID-19 shortened season, the total minutes played in a season in MLS increased largely because the league added 10 teams between 2013 and 2024. @cr-total_mins
+
+The first few years after VAR was introduced in 2018 saw the difference between <span style="color:#ff5a00">**capped minutes**</span> and <span style="color:#007bdd">**expanded minutes**</span> grow to around **10%**. @cr-total_mins
+
+After the number of allowed substitutions increased to 5 from 3 following the COVID-19 pandemic, the difference grew even more, reaching over **13%** in the 2024 MLS season. @cr-total_mins
+::::
+
+## Substitutes show the largest difference between capped minutes and expanded minutes
+
+As you might expect since expanded minutes come from stoppage time, <span style="color:#f0be3d">**substitutes**</span> are more affected than <span style="color:#04a3bd">**starters**</span> by the use of <span style="color:#ff5a00">**capped minutes**</span> rather than <span style="color:#007bdd">**expanded minutes**</span>. 
+
+With increased game lengths, the difference between <span style="color:#ff5a00">**capped minutes**</span> and <span style="color:#007bdd">**expanded minutes**</span> for <span style="color:#04a3bd">**starters**</span> remains relatively modest, reaching just over 10% for the first time in 2024. However, for <span style="color:#f0be3d">**substitutes**</span>, using <span style="color:#007bdd">**expanded minutes**</span> resulted in around a 25% increase in minutes played prior to the introduction of VAR. This has increased to around 35% by 2024.  
+
+```{r}
+
+#| label: over
+#| fig-width: 12
+#| fig-height: 8
+
+
+ starter_color = "#04a3bd"
+ sub_color = "#f0be3d"
+ 
+time_difference_subs_all= readRDS("/Users/etmckinley/Library/CloudStorage/GoogleDrive-etmckinley@gmail.com/My Drive/R Projects/ASA DB/Articles/expanded mins and subs/time_difference_subs_all.rds")
+
+time_difference_subs_all %>% 
+  ggplot(aes(x=factor(season_id), y=perc_diff, fill = type, group=type))+
+  geom_col(position = position_dodge())+
+  theme_gplus_saira_light()+
+  theme(legend.position = "top")+
+  scale_y_continuous(labels = scales::percent)+
+  scale_fill_manual(values = c(starter_color, sub_color))+
+  labs(x="",
+       y = 'Difference between <span style="color:#ff5a00">**capped minutes**</span> and <span style="color:#007bdd">**expanded minutes**</span>',
+       title = '<span style="color:#f0be3d">**Substitutes**</span> are most affected by the use of <span style="color:#007bdd">**expanded minutes**</span>', 
+       subtitle = 'All minutes played in MLS regular season by <span style="color:#04a3bd">**starters**</span> and <span style="color:#f0be3d">**substitutes**</span>'
+       )+
+    theme(axis.title = element_markdown(size=11),
+        plot.title=element_markdown(),
+        plot.subtitle = element_markdown(size=12),
+        legend.position = "none",
+        panel.grid.major.x = element_blank())
+
+
+```
+
+At an individual player level, the higher percentage of minutes that are played as a <span style="color:#f0be3d">**substitute**</span> correlate with a larger difference between <span style="color:#ff5a00">**capped minutes**</span> and <span style="color:#007bdd">**expanded minutes**</span>. For players with a minimum of 200 minutes played, this difference can reach almost 50%. 
+
+```{r}
+
+#| label: over
+#| fig-width: 12
+#| fig-height: 8
+
+
+ starter_color = "#04a3bd"
+ sub_color = "#f0be3d"
+ 
+time_difference_subs= readRDS("/Users/etmckinley/Library/CloudStorage/GoogleDrive-etmckinley@gmail.com/My Drive/R Projects/ASA DB/Articles/expanded mins and subs/time_difference_subs.rds")
+
+time_difference_subs %>% 
+  filter(type == "Sub",
+         mins >200) %>% 
+  ggplot(aes(x=perc_sub, y=perc_diff))+
+  geom_point( aes(color = perc_sub, alpha = perc_sub))+
+  geom_smooth(method = "lm", formula = 'y ~ x')+
+  ggpubr::stat_cor()+
+  theme_gplus_saira_light()+
+  scale_y_continuous(labels = scales::percent)+
+  scale_x_continuous(labels = scales::percent)+
+  scale_colour_gradient(
+  low = starter_color,
+  high = sub_color,
+)+
+  scale_alpha_continuous(range = c(0.05, .9))+
+  labs(x= '<span style="color:#ff5a00">**Capped minutes**</span> as a <span style="color:#f0be3d">**substitute**</span>',
+       y = 'Difference between <span style="color:#ff5a00">**capped minutes**</span> and <span style="color:#007bdd">**expanded minutes**</span>',
+       title = 'Players used as a <span style="color:#f0be3d">**substitute**</span> show the largest difference<br>between <span style="color:#ff5a00">**capped minutes**</span> and <span style="color:#007bdd">**expanded minutes**</span>',
+       subtitle = "Player seasons in MLS 2013-2024; minimum 200 minutes")+
+  theme(axis.title = element_markdown(size=11),
+        plot.title=element_markdown(),
+        plot.subtitle = element_text(size=12),
+        legend.position = "none",
+        panel.grid.major.x = element_blank())
+
+
+```
+
+While they should generally be ignored, players with fewer than 200 minutes played in a season can have some staggering differences between <span style="color:#ff5a00">**capped minutes**</span> and <span style="color:#007bdd">**expanded minutes**</span>. FC Dallas's [Anthony Ramirez](https://www.mlssoccer.com/players/anthony-ramirez/) made one appearance at the end of regular time on July 20, 2024 and was credited with 1 <span style="color:#ff5a00">**capped minute**</span>. However, 13 minutes of second half stoppage time were played leading to a 1,200% difference in <span style="color:#ff5a00">**capped minutes**</span> and <span style="color:#007bdd">**expanded minutes**</span>.  
+
+
+
+:::: {.cr-section layout="sidebar-right"}
+In practice, though, we don't really care all that much about players that only make a handful of appearances in a season (except maybe wunderkind Cavan Sullivan with his 9 <span style="color:#ff5a00">**capped minutes**</span> and 19 <span style="color:#007bdd">**expanded minutes**</span>). Setting a minimum of 500 minutes played that is potentially enough time to start making some non-confident assessments of players, these are the top ten players by difference between <span style="color:#ff5a00">**capped minutes**</span> and <span style="color:#007bdd">**expanded minutes**</span>. @cr-table
+
+All 10 of the players with the largest differences between <span style="color:#ff5a00">**capped minutes**</span> and <span style="color:#007bdd">**expanded minutes**</span> have come in the 2022, 2023, and 2024 seasons. @cr-table
+
+The common theme among these players is that they are largely attacking players that make the majority of their appearances and minutes as a <span style="color:#f0be3d">**substitute**</span>. @cr-table
+
+Topping the list is g+ favorite, Danny Musovski, who put up a 95th percentile g+ season in 2021 for LAFC. The Seattle forward had a 30% difference in <span style="color:#ff5a00">**capped minutes**</span> and <span style="color:#007bdd">**expanded minutes**</span> in 2024 while making 20 of his 24 appearances as a <span style="color:#f0be3d">**substitute**</span>. @cr-table
+
+::: {#cr-table}
+```{r table}
+#| warning: false
+library(gt)
+library(gtExtras)
+library(countrycode)
+library(glue)
+
+player_info = readRDS("/Users/etmckinley/Library/CloudStorage/GoogleDrive-etmckinley@gmail.com/My Drive/R Projects/ASA DB/Articles/expanded mins and subs/playerinfo.rds")
+
+player_info = player_info %>%
+  mutate(head_shot = glue("https://american-soccer-analysis-headshots.s3.amazonaws.com/player_headshots/{player_hashid}.png"))
+
+time_difference_subs %>% 
+  filter(total_mins >500) %>% 
+  group_by(player_id, season_id) %>% 
+  mutate(starts = max(starts),
+         subs = max(subs)) %>% 
+  filter(type == "Sub") %>% 
+  ungroup() %>% 
+  mutate(games = starts+subs) %>% 
+  top_n(10, perc_diff) %>% 
+  left_join(player_info %>% select(player_id, head_shot)) %>% 
+  select(head_shot, player_name, season_id, games, starts, subs, total_mins, total_expanded_mins, perc_sub, perc_diff) %>% 
+  arrange(-perc_diff) %>% 
+  gt() %>% 
+  gt_img_rows(head_shot,img_source = "web") %>% 
+  fmt_percent(columns = c(perc_sub, perc_diff), decimals=0) %>% 
+    cols_label(head_shot = "",
+             player_name = "",
+             season_id = "Season",
+             games = "Total",
+             starts = html('<span style="color:#04a3bd">Start</span>'),
+             subs = html('<span style="color:#f0be3d">Sub</span>'),
+             total_mins = html('<span style="color:#ff5a00">Capped</span>'),
+             total_expanded_mins = html('<span style="color:#007bdd">Expanded</span>'),
+             perc_sub = html('<span style="color:#f0be3d">as Sub</span>'),
+             perc_diff = "Difference"
+             ) %>% 
+    tab_spanner(
+    label = "Appearances",
+    columns = c(games, starts, subs)
+  ) %>% 
+    tab_spanner(
+    label = "Minutes",
+    columns = c(total_mins, total_expanded_mins, perc_sub, perc_diff)
+  ) %>% 
+    tab_header(
+    title = md('Top 10 largest differences in <span style="color:#ff5a00">**capped minutes**</span> and <span style="color:#007bdd">**expanded minutes**</span>'),
+    subtitle = md('MLS 2013-2024, minimum 500 minutes played')
+  ) %>% 
+opt_table_font(
+      font = list(
+        google_font("Saira Condensed"),
+        default_fonts()
+      )
+    ) %>% 
+  opt_row_striping() %>%
+    tab_options(
+      row.striping.background_color = "#f8fbfc",
+      table_body.hlines.color = "#f6fdfe",
+      source_notes.font.size = 12,
+      table.font.size = 14,
+      table.font.color = "#15202B",
+      heading.align = "left",
+      heading.title.font.size = 20,
+      table.border.top.color = "white",
+      table.border.top.width = px(2),
+      data_row.padding = px(3)
+    )
+  
+```
+:::
+::::
+
+## Substitutes' minutes-normalized stats are better than starters
+
+OK, so [**substitutes**]{style="color:#f0be3d"} show the largest difference between [**capped minutes**]{style="color:#ff5a00"} and [**expanded minutes**]{style="color:#007bdd"}, but so what?
+We don't really care about minutes played on its own.
+
+What really matters is what players do in the minutes they play.
+Across almost every offensive statistical measure, [**substitutes**]{style="color:#f0be3d"} have higher per minute metrics than [**starters**]{style="color:#04a3bd"}.
+This has been very well documented by [Michael Caley](https://www.expectinggoals.com/p/substitute-effects-study-part-i) for many stats, so for simplicity we will just focus on goals and expected goals.
+
+For normalization we will use three different methods:
+
+  * [*per 90'*]{style="color:#ff5a00"} : [**capped minutes**]{style="color:#ff5a00"} normalized to 90 minutes per game
+
+  * [*per 96'*]{style="color:#007bdd"} : [**expanded minutes**]{style="color:#007bdd"} normalized to 96 minutes per game
+
+  * *per season'* : [**expanded minutes**]{style="color:#007bdd"} normalized to the average game length for each season to account for increasing game lengths in recent years
+
+:::: {.cr-section layout="overlay-center"}
+::: {#cr-subs_performance}
+```{r subs-performance}
+#| output: 'asis'
+#| fig-width: 12
+#| fig-height: 8
+#| warning: false
+
+goal_differences = readRDS( "/Users/etmckinley/Library/CloudStorage/GoogleDrive-etmckinley@gmail.com/My Drive/R Projects/ASA DB/Articles/expanded mins and subs/goal_differences.rds")
+
+goal_differences %>% 
+  select(type,ends_with("90"), ends_with("96"), ends_with("season")) %>% 
+  pivot_longer(-type) %>% 
+  filter(!str_detect(name,"shots")) %>% 
+  filter(!str_detect(name,"kp")) %>%
+  #filter(!str_detect(name,"assists")) %>%
+  #filter(!str_detect(name,"xa")) %>%
+  mutate(label = case_when(str_detect(name,"goals_") ~"Goals",
+                           str_detect(name, "xg")~ "xGoals",
+                           str_detect(name, "assists_") ~ "Assists",
+                           str_detect(name, "xa_")~ "xAssists",
+                           str_detect(name, "shots_on")~ "Shots on Target",
+                           str_detect(name, "shots_")~ "Shots",
+                           str_detect(name, "kp_") ~ "Key Passes")) %>% 
+  mutate(exp = case_when(str_detect(name,"goals_90") | name =="assists_90" | name =="kp_90" | name =='shots_90' | name=='shots_on_target_90' ~"Actual per 90'",
+                  str_detect(name,"goals_96") | name == "assists_96" | name =="kp_96" | name =='shots_96' | name=='shots_on_target_96'~"Actual per 96'",
+                  str_detect(name,"goals_season") | name == "assists_season" | name =="kp_season" | name =='shots_season' | name=='shots_on_target_season' ~"Actual per season'",
+                  str_detect(name, "xg_90") | name == "xa_90" ~ "Expected per 90'",
+                  str_detect(name, "xg_96") | name == "xa_96"~ "Expected per 96'",
+                  str_detect(name, "xg_season") | name == "xa_season"~ "Expected per season'")) %>%
+  mutate(min_type = case_when(str_detect(name,"_90")~'<span style="color:#ff5a00">*per 90\'*</span>',
+                              str_detect(name,"_96")~'<span style="color:#007bdd">*per 96\'*</span>',
+                              str_detect(name,"_season")~"*per season'*"),
+         min_type = fct_relevel(min_type,'<span style="color:#ff5a00">*per 90\'*</span>', '<span style="color:#007bdd">*per 96\'*</span>', "*per season'*" )) %>% 
+  #filter(str_detect(exp, "per 90")) %>% 
+  mutate(label = fct_relevel(label, "Goals", "xGoals")) %>% 
+  ggplot(aes(x=label, y=value, color=type, group=type))+
+  expand_limits(y=0)+
+  facet_wrap(~min_type, nrow=1)+
+  geom_jitter(position= position_dodge(width=0.4), alpha=0.2, size=1.75)+
+  stat_summary(fun.data = mean_cl_boot, position= position_dodge(width=0.4), size=.75)+
+    theme_minimal()+
+  theme_gplus_saira_light()+
+  theme(axis.text.x = element_text(hjust=1, angle=45),
+        legend.position="none",
+        plot.title=element_markdown(size=32),
+        plot.subtitle = element_text(size=14),
+        strip.text = element_markdown(size=18),
+        panel.grid.major.x = element_blank())+
+  scale_color_manual(values = c(starter_color, sub_color))+
+  labs(x="", 
+       y="",
+       title = '<span style="color:#f0be3d">**Substitutes**</span> have higher per minute stats than <span style="color:#04a3bd">**starters**</span>',
+       subtitle = "All minutes played in MLS: 2013-2024")
+
+
+```
+:::
+
+Each small dot is the value for a metric for all [**starters**]{style="color:#04a3bd"} and [**substitutes**]{style="color:#f0be3d"} in a season @cr-subs_performance
+
+The large dot for each metric is the average over all seasons with the line as the bootstrapped 95% confidence interval
+@cr-subs_performance
+
+No matter the minutes normalization method, [**substitutes**]{style="color:#f0be3d"} have higher values than [**starters**]{style="color:#04a3bd"} @cr-subs_performance
+
+There is little difference between normalization methods for [**starters**]{style="color:#04a3bd"} @cr-subs_performance
+
+Normalization with either method that uses [**expanded minutes**]{style="color:#007bdd"} decreases the difference between [**substitutes**]{style="color:#f0be3d"} and [**starters**]{style="color:#04a3bd"} @cr-subs_performance
+
+There is little difference between [*per 96'*]{style="color:#007bdd"} and *per season'* normalization methods  [@cr-subs_performance]{pan-to="-35%,-10%" scale-by="1.3"}
+
+Note: [**substitutes**]{style="color:#f0be3d"} do not "finish" better (i.e. goals > xG) than [**starters**]{style="color:#04a3bd"} as has been seen by others using European data @cr-subs_performance
+
+::::
+
+Even though game times have been increasing, there was little difference between the [*per 96'*]{style="color:#007bdd"} and *per season'* normalization methods, going forward we'll only use the [*per 96'*]{style="color:#007bdd"} method. Perhaps if game times get much longer, then this will have to be reevaluated. 
+
+## [*per 96'*]{style="color:#007bdd"} normalization removes the difference between starters' and substitutes' metrics for primarily offensive players
+
+Overall, [**substitutes**]{style="color:#f0be3d"} have higher per-minute metrics than [**starters**]{style="color:#04a3bd"}, but this difference is not evenly distributed among positions.
+
+:::: {.cr-section layout="overlay-center"}
+::: {#cr-pos_xg}
+```{r}
+#| fig-width: 13
+#| fig-height: 7
+#| 
+library(ggpubr)
+
+goal_differences_pos = readRDS( "/Users/etmckinley/Library/CloudStorage/GoogleDrive-etmckinley@gmail.com/My Drive/R Projects/ASA DB/Articles/expanded mins and subs/goal_differences_pos.rds")
+
+goal_differences_pos %>% 
+  filter(primary_general_position != "GK") %>% 
+  ungroup() %>% 
+  select(type, season_id, primary_general_position, ends_with("90"), ends_with("96"), ends_with("season")) %>% 
+  pivot_longer(-c(type, primary_general_position, season_id), values_drop_na = TRUE) %>% 
+  mutate(label = case_when(str_detect(name,"goals_") | str_detect(name, "xg_")~"Goals",
+                           str_detect(name, "a_") | str_detect(name, "xa_")~ "Assists",
+                           str_detect(name, "kp_") ~ "Key Passes"),
+         exp = case_when(str_detect(name,"goals_90") | name =="a_90"~'Goals <span style="color:#ff5a00">*per 90\'*</span>',
+                         str_detect(name,"goals_96") | name == "a_96"~'Goals <span style="color:#007bdd">*per 96\'*</span>',
+                         str_detect(name,"goals_season") | name == "a_season"~"Actual per season'",
+                        str_detect(name, "xg_90") | name == "xa_90"~ 'Expected Goals <span style="color:#ff5a00">*per 90\'*</span>',
+                         str_detect(name, "xg_96") | name == "xa_96"~ 'Expected Goals <span style="color:#007bdd">*per 96\'*</span>',
+                        str_detect(name, "xg_season") | name == "xa_season"~ "Expected per season'"),
+         exp = fct_relevel(exp, 'Goals <span style="color:#ff5a00">*per 90\'*</span>', 'Goals <span style="color:#007bdd">*per 96\'*</span>', 'Expected Goals <span style="color:#ff5a00">*per 90\'*</span>', 'Expected Goals <span style="color:#007bdd">*per 96\'*</span>')) %>% 
+  filter(!exp %in% c("Expected per season'", "Actual per season'")) %>% 
+  mutate(primary_general_position = fct_relevel(primary_general_position, "CB", "FB", "DM", "CM", "AM", "W", "ST")) %>% 
+  ggplot(aes(x=exp, y=value, color=type, group=type))+
+  facet_wrap(~primary_general_position, nrow=1)+
+  #facet_wrap(~primary_general_position, nrow=1)+
+  geom_jitter(position= position_dodge(width=0.4), alpha=0.2, size=1.75)+
+  stat_summary(fun.data = mean_cl_boot, position= position_dodge(width=0.4), size=.75)+
+  stat_compare_means(
+    aes(group = type), 
+    method = "wilcox.test", 
+    label = "p.signif", 
+    hide.ns = TRUE,
+    label.y.npc = 0.8,
+    size=5# Use NPC (normalized position) to set labels at the top
+  ) +
+  theme_gplus_saira_light()+
+  scale_color_manual(values = c(starter_color, sub_color))+
+  #scale_y_continuous(limits=c(0,))
+  theme(axis.text.x = element_markdown(hjust=1, angle=45),
+        legend.position = "none",
+        plot.title=element_markdown(size=30),
+        plot.subtitle = element_text(size=14),
+        plot.caption = element_markdown(size=10),
+        panel.grid.major.x = element_blank())+
+  labs(x="",
+       y ="",
+       title = 'Attacking substitutes <span style="color:#007bdd">per *96\'*</span> stats are not different for <span style="color:#04a3bd">**starters**</span> and <span style="color:#f0be3d">**substitutes**</span>',
+       subtitle = "All minutes played in MLS: 2013-2024",
+       caption = 'Statistically significant difference between <span style="color:#ff5a00">per *90\'*</span> and <span style="color:#007bdd">per *96\'*</span> metrics. *:p < 0.05,**: p < 0.01, ***: p < 0.001, ****: p < 0.0001')
+```
+:::
+
+Each small dot is the value for a metric for all [**starters**]{style="color:#04a3bd"} and [**substitutes**]{style="color:#f0be3d"} in a season for each position @cr-pos_xg
+
+The large dot for each metric is the average over all seasons with the line as the bootstrapped 95% confidence interval for each position
+@cr-pos_xg
+
+Asterisks indicate whether there is a statistically significant difference between [**starters**]{style="color:#04a3bd"} and [**substitutes**]{style="color:#f0be3d"} for each metric @cr-pos_xg
+
+For defensive and central midfield positions, normalizing using a [*per 96'*]{style="color:#007bdd"} method doesn't remove the performance boost that [**substitutes**]{style="color:#f0be3d"} get over [**starters**]{style="color:#04a3bd"} [@cr-pos_xg]{pan-to="35%, 0%" scale-by="1.2"}
+
+But for attackers, where [**substitutes**]{style="color:#f0be3d"} have higher stats than [**starters**]{style="color:#04a3bd"} using [*per 90'*]{style="color:#ff5a00"} normaliztion, that difference disappears when using a [*per 96'*]{style="color:#007bdd"} method [@cr-pos_xg]{pan-to="-45%, 0%" scale-by="1.4"}
+
+Curiously, for attacking midfielders and strikers  [**substitutes**]{style="color:#f0be3d"} have lower goals and expected goals on a [*per 96'*]{style="color:#007bdd"} basis than [**starters**]{style="color:#04a3bd"}, although this is not statistically significant [@cr-pos_xg]{pan-to="-45%, 0%" scale-by="1.4"}
+
+So the increased production of offensive stats for [**substitutes**]{style="color:#f0be3d"} over [**starters**]{style="color:#04a3bd"} comes from the attacking output of more defensive players. @cr-pos_xg
+
+::::
+
+To explain this we have to drill just a bit deeper. It's been known since the [dawn of analytics](https://thepowerofgoals.blogspot.com/2012/05/scoring-efficiency-and-current-score.html) that teams that are winning tend to have fewer, but higher quality shots and more goals than teams that are losing. This has been confirmed [many](https://statsbomb.com/articles/soccer/score-effects/) [times](https://statsandsnakeoil.wordpress.com/2015/03/12/visualising-the-championship-good-lucky-matrix-over-time/) since.
+
+However, almost all of the public work looking at game states and shots was done in European leagues, was limited to a single season or team, and in some cases even predated expected goals. Since [MLS is weird](https://www.americansocceranalysis.com/home/2022/7/20/europe-money-and-the-problem-with-disparity), we'll look across all the 12 seasons available in the ASA era.
+
+```{r}
+#| fig-width: 14
+#| fig-height: 8
+
+goal_difference_gs_overall = readRDS("/Users/etmckinley/Library/CloudStorage/GoogleDrive-etmckinley@gmail.com/My Drive/R Projects/ASA DB/Articles/expanded mins and subs/goal_difference_gs_overall.rds")
+
+goal_difference_gs_overall %>% 
+  #select(-shots_96, -xg_shot_96) %>% 
+  ungroup() %>% 
+  pivot_longer(ends_with("_96")) %>% 
+  mutate(label = case_when(name %in% c("g_96", "xg_96")~ 'Goals per 96\'<br><span style="color:#4682B4">xG per 96\'</span>',
+                           name == "shots_96"~ "Shots per 96'",
+                           name == "xg_shot_96"~'Conversion Rate<br><span style="color:#4682B4">xG per Shot</span>',
+                           name == 'conversion_96'~ 'Conversion Rate<br><span style="color:#4682B4">xG per Shot</span>'),
+         label = fct_relevel(label, "Shots per 96'", 'Conversion Rate<br><span style="color:#4682B4">xG per Shot</span>', 'Goals per 96\'<br><span style="color:#4682B4">xG per 96\'</span>'),
+         color = case_when(name == "xg_96" ~ "steelblue",
+                           name == "xg_shot_96" ~ "steelblue",
+                           .default = "black")) %>% 
+  
+  mutate(game_state= fct_relevel(game_state,  "-2+","-1", "=" , "+1", "2+")) %>% 
+  ggplot(aes(x=game_state, y=value, color=color)) + 
+  geom_jitter(position= position_dodge(width=0.4), alpha=0.2, size=1.75)+
+  stat_summary(fun.data = mean_cl_boot, position= position_dodge(width=0.4), size=.75)+
+  facet_wrap(~label, scales="free")+
+  theme_gplus_saira_light()+
+  theme(        legend.position = "none",
+                plot.title=element_markdown(size=30),
+                strip.text = element_markdown(size=20),
+                plot.subtitle = element_text(size=14),
+                plot.caption = element_text(size=10, hjust=0),
+                panel.grid.major.x = element_blank())+
+  scale_color_identity()+
+  labs(title = 'Winning teams shoot fewer, but higher quality shots, and score more **goals** than <span style="color:#4682B4">**expected**</span>',
+       subtitle = "All MLS games in each game state for each season: 2013-2024",
+       x= "Score Game State",
+       y="",
+       caption = "Note: y-axis does not show zero")
+```
+In short, previous reports are confirmed. Teams that are winning take fewer, but higher quality shots than teams that are losing or, to a lesser extend, tied. Additionally, teams in any non-tied game state score more goals than when tied, with teams up 2 or more running up the score even more. 
+
+However, for [expected goals]{style="color:#4682B4"}, losing teams generate more than teams that are tied or up one goal. The main difference between winning and losing team is that losing teams score fewer goals than [expected]{style="color:#4682B4"}, while winning teams score more. This has been often attributed to more space being available for winning teams to attack into as the losing team has to be more adventurous chasing the game. Of note, the ASA xG model does not have defender positioning to take this into account (although it does have many other factors that can infer it), and other models may not see this discrepancy.
+
+With that taken care of, how does game state affect specific positions? Here we'll look at how a starter's xG [*per 90'*]{style="color:#ff5a00"} or [*per 96'*]{style="color:#007bdd"} compares to [**substitutes**]{style="color:#f0be3d"} brought into the game at different game states.
+
+```{r}
+#| fig-width: 13
+#| fig-height: 10
+
+goal_differences_pos_gs = readRDS("/Users/etmckinley/Library/CloudStorage/GoogleDrive-etmckinley@gmail.com/My Drive/R Projects/ASA DB/Articles/expanded mins and subs/goal_differences_pos_gs.rds")
+
+goal_differences_pos_gs %>% 
+  filter(         !is.na(game_state)) %>% 
+  ungroup() %>% 
+  select(type, season_id, primary_general_position, game_state, ends_with("90"), ends_with("96"), ends_with("season")) %>% 
+  pivot_longer(-c(type, primary_general_position, season_id, game_state), values_drop_na = TRUE) %>% 
+    mutate(label = case_when(str_detect(name,"goals_") | str_detect(name, "xg_")~"Goals",
+                           str_detect(name, "a_") | str_detect(name, "xa_")~ "Assists",
+                           str_detect(name, "kp_") ~ "Key Passes"),
+         exp = case_when(str_detect(name,"goals_90") | name =="a_90"~'Goals <span style="color:#ff5a00">*per 90\'*</span>',
+                         str_detect(name,"goals_96") | name == "a_96"~'Goals <span style="color:#007bdd">*per 96\'*</span>',
+                         str_detect(name,"goals_season") | name == "a_season"~"Actual per season'",
+                        str_detect(name, "xg_90") | name == "xa_90"~ 'Expected Goals <span style="color:#ff5a00">*per 90\'*</span>',
+                         str_detect(name, "xg_96") | name == "xa_96"~ 'Expected Goals <span style="color:#007bdd">*per 96\'*</span>',
+                        str_detect(name, "xg_season") | name == "xa_season"~ "Expected per season'"),
+         exp = fct_relevel(exp, 'Goals <span style="color:#ff5a00">*per 90\'*</span>', 'Goals <span style="color:#007bdd">*per 96\'*</span>', 'Expected Goals <span style="color:#ff5a00">*per 90\'*</span>', 'Expected Goals <span style="color:#007bdd">*per 96\'*</span>')) %>% 
+  mutate(gs_label = case_when(type == "Starters"~"Starter",
+                              game_state == "="~ "Tied",
+                              game_state == "+1"~ "Winning by 1",
+                              game_state == "2+"~ "Winning by 2+",
+                              game_state == "-1"~ "Losing by 1",
+                              game_state == "-2+" ~ "Losing by 2+"),
+         gs_label = fct_relevel(gs_label, "Starter", "Losing by 2+", "Losing by 1", "Tied", "Winning by 1", "Winning by 2+"),
+         primary_general_position = fct_relevel(primary_general_position,  "CB","FB", "DM", "CM", "AM", "W", "ST")) %>% 
+  filter(exp != "Expected per season'",
+         exp != "Actual per season'") %>% 
+  ggplot(aes(x=exp, y=value, color=gs_label, group=gs_label))+
+  
+  facet_wrap(~primary_general_position, nrow=1)+
+  #geom_jitter(position= position_dodge(width=0.4), alpha=0.1)+
+  stat_summary(fun.data = mean_cl_boot, position= position_dodge(width=0.6), size=.7)+
+  theme_gplus_saira_light()+
+  scale_color_manual(values = c("#04a3bd","#8f2d56","#d81159","#ffbc42", "#7189ff", "#624cab"))+
+  #scale_y_continuous(limits=c(0,))
+  theme(axis.text.x = element_markdown(hjust=1, angle=45),
+        legend.position = "none",
+        plot.title=element_markdown(size=30),
+        plot.subtitle = element_markdown(size=14),
+        plot.caption = element_text(size=10),
+        panel.grid.major.x = element_blank())+
+  labs(x="",
+       y ="",
+       title = "Goals and xG generated by different positions by game state when subbed into game",
+       subtitle = 'All minutes played in MLS 2013-2024 for <span style="color:#04a3bd">**starters**</span> or subs while <span style="color:#8f2d56">**losing by 2+**</span>, <span style="color:#d81159">**losing by 1**</span>,\n<span style="color:#ffbc42">**tied**</span>,\n<span style="color:#7189ff">**winning by 1**</span>, or <span style="color:#624cab">**winning by 2**</span>'
+       )
+```
+As was shown before, defenders have lower goals and xG than attackers. [**Substitute**]{style="color:#f0be3d"} defenders and midfielders also show little difference between [*per 90'*]{style="color:#ff5a00"} and [*per 96'*]{style="color:#007bdd"} methods whereas attacking [**substitutes**]{style="color:#f0be3d"} do not get a boost when using [*per 96'*]{style="color:#007bdd"} accounting. 
+
+However, the effects of game state are different between defenders and strikers, with [**substitute**]{style="color:#f0be3d"} defenders contributing the most goals and expected goals when a team is losing compared to [**starters**]{style="color:#04a3bd"}, and [**substitutes**]{style="color:#f0be3d"} strikers doing so when winning. Midfielders are a bit of a jumble.
+
+Let's take a bit of a closer look at center backs and strikers to illustrate the difference more clearly.
+
+::::{.cr-section layout="sidebar-left"}
+:::{#cr-pos_gs_cb}
+```{r}
+#| fig-width: 6
+#| fig-height: 6
+
+goal_differences_pos_gs %>% 
+  filter(primary_general_position == "CB",
+         !is.na(game_state)) %>% 
+  ungroup() %>% 
+  select(type, season_id, primary_general_position, game_state, ends_with("90"), ends_with("96"), ends_with("season")) %>% 
+  pivot_longer(-c(type, primary_general_position, season_id, game_state), values_drop_na = TRUE) %>% 
+  mutate(label = case_when(str_detect(name,"goals_") | str_detect(name, "xg_")~"Goals",
+                           str_detect(name, "a_") | str_detect(name, "xa_")~ "Assists",
+                           str_detect(name, "kp_") ~ "Key Passes"),
+         exp = case_when(str_detect(name,"goals_90") | name =="a_90"~'Goals <span style="color:#ff5a00">*per 90\'*</span>',
+                         str_detect(name,"goals_96") | name == "a_96"~'Goals <span style="color:#007bdd">*per 96\'*</span>',
+                         str_detect(name,"goals_season") | name == "a_season"~"Actual per season'",
+                        str_detect(name, "xg_90") | name == "xa_90"~ 'Expected Goals <span style="color:#ff5a00">*per 90\'*</span>',
+                         str_detect(name, "xg_96") | name == "xa_96"~ 'Expected Goals <span style="color:#007bdd">*per 96\'*</span>',
+                        str_detect(name, "xg_season") | name == "xa_season"~ "Expected per season'"),
+         exp = fct_relevel(exp, 'Goals <span style="color:#ff5a00">*per 90\'*</span>', 'Goals <span style="color:#007bdd">*per 96\'*</span>', 'Expected Goals <span style="color:#ff5a00">*per 90\'*</span>', 'Expected Goals <span style="color:#007bdd">*per 96\'*</span>')) %>% 
+  mutate(gs_label = case_when(type == "Starters"~"Starter",
+                              game_state == "="~ "Tied",
+                              game_state == "+1"~ "Winning by 1",
+                              game_state == "2+"~ "Winning by 2+",
+                              game_state == "-1"~ "Losing by 1",
+                              game_state == "-2+" ~ "Losing by 2+"),
+         gs_label = fct_relevel(gs_label, "Starter", "Losing by 2+", "Losing by 1", "Tied", "Winning by 1", "Winning by 2+")) %>% 
+  filter(exp != "Expected per season'",
+         exp != "Actual per season'") %>% 
+  ggplot(aes(x=exp, y=value, color=gs_label, group=gs_label))+
+  
+  #facet_wrap(~primary_general_position, nrow=1)+
+  #geom_jitter(position= position_dodge(width=0.4), alpha=0.1)+
+  stat_summary(fun.data = mean_cl_boot, position= position_dodge(width=0.6), size=.7)+
+  theme_gplus_saira_light()+
+  scale_color_manual(values = c("#04a3bd","#8f2d56","#d81159","#ffbc42", "#7189ff", "#624cab"))+
+  #scale_y_continuous(limits=c(0,))
+  theme(axis.text.x = element_markdown(hjust=1, angle=45),
+        legend.position = "none",
+        plot.title=element_markdown(size=30),
+        plot.subtitle = element_markdown(size=14),
+        plot.caption = element_text(size=10),
+        panel.grid.major.x = element_blank())+
+  labs(x="",
+       y ="",
+       title = "Center backs",
+       subtitle = 'All minutes played in MLS 2013-2024 for <span style="color:#04a3bd">**starters**</span> or substitutes while <br><span style="color:#8f2d56">**losing by 2+**</span>, <span style="color:#d81159">**losing by 1**</span>, <span style="color:#ffbc42">**tied**</span>, <span style="color:#7189ff">**winning by 1**</span>, or <span style="color:#624cab">**winning by 2**</span><br>'
+       )
+```
+:::
+
+:::{#cr-pos_gs_st}
+```{r}
+#| fig-width: 6
+#| fig-height: 6
+
+goal_differences_pos_gs %>% 
+  filter(primary_general_position == "ST",
+         !is.na(game_state)) %>% 
+  ungroup() %>% 
+  select(type, season_id, primary_general_position, game_state, ends_with("90"), ends_with("96"), ends_with("season")) %>% 
+  pivot_longer(-c(type, primary_general_position, season_id, game_state), values_drop_na = TRUE) %>% 
+    mutate(label = case_when(str_detect(name,"goals_") | str_detect(name, "xg_")~"Goals",
+                           str_detect(name, "a_") | str_detect(name, "xa_")~ "Assists",
+                           str_detect(name, "kp_") ~ "Key Passes"),
+         exp = case_when(str_detect(name,"goals_90") | name =="a_90"~'Goals <span style="color:#ff5a00">*per 90\'*</span>',
+                         str_detect(name,"goals_96") | name == "a_96"~'Goals <span style="color:#007bdd">*per 96\'*</span>',
+                         str_detect(name,"goals_season") | name == "a_season"~"Actual per season'",
+                        str_detect(name, "xg_90") | name == "xa_90"~ 'Expected Goals <span style="color:#ff5a00">*per 90\'*</span>',
+                         str_detect(name, "xg_96") | name == "xa_96"~ 'Expected Goals <span style="color:#007bdd">*per 96\'*</span>',
+                        str_detect(name, "xg_season") | name == "xa_season"~ "Expected per season'"),
+         exp = fct_relevel(exp, 'Goals <span style="color:#ff5a00">*per 90\'*</span>', 'Goals <span style="color:#007bdd">*per 96\'*</span>', 'Expected Goals <span style="color:#ff5a00">*per 90\'*</span>', 'Expected Goals <span style="color:#007bdd">*per 96\'*</span>')) %>% 
+  mutate(gs_label = case_when(type == "Starters"~"Starter",
+                              game_state == "="~ "Tied",
+                              game_state == "+1"~ "Winning by 1",
+                              game_state == "2+"~ "Winning by 2+",
+                              game_state == "-1"~ "Losing by 1",
+                              game_state == "-2+" ~ "Losing by 2+"),
+         gs_label = fct_relevel(gs_label, "Starter", "Losing by 2+", "Losing by 1", "Tied", "Winning by 1", "Winning by 2+")) %>% 
+  filter(exp != "Expected per season'",
+         exp != "Actual per season'") %>% 
+  ggplot(aes(x=exp, y=value, color=gs_label, group=gs_label))+
+  
+  #facet_wrap(~primary_general_position, nrow=1)+
+  #geom_jitter(position= position_dodge(width=0.4), alpha=0.1)+
+  stat_summary(fun.data = mean_cl_boot, position= position_dodge(width=0.6), size=.7)+
+  theme_gplus_saira_light()+
+  scale_color_manual(values = c("#04a3bd","#8f2d56","#d81159","#ffbc42", "#7189ff", "#624cab"))+
+  #scale_y_continuous(limits=c(0,))
+  theme(axis.text.x = element_markdown(hjust=1, angle=45),
+        legend.position = "none",
+        plot.title=element_markdown(size=30),
+        plot.subtitle = element_markdown(size=14),
+        plot.caption = element_text(size=10),
+        panel.grid.major.x = element_blank())+
+  labs(x="",
+       y ="",
+       title = "Strikers",
+       subtitle = 'All minutes played in MLS 2013-2024 for <span style="color:#04a3bd">**starters**</span> or substitutes while <br><span style="color:#8f2d56">**losing by 2+**</span>, <span style="color:#d81159">**losing by 1**</span>, <span style="color:#ffbc42">**tied**</span>, <span style="color:#7189ff">**winning by 1**</span>, or <span style="color:#624cab">**winning by 2**</span><br>'
+       )
+```
+:::
+
+:::{#cr-shot_times_cb}
+```{r}
+#| fig-width: 6
+#| fig-height: 6
+
+shot_times = readRDS("/Users/etmckinley/Library/CloudStorage/GoogleDrive-etmckinley@gmail.com/My Drive/R Projects/ASA DB/Articles/expanded mins and subs/shot_times.rds") %>% 
+  mutate(type = case_when(type == "Starter"~"Starters",
+                          type == "Substitute"~"Substitutes"))
+
+shot_times %>% 
+  ungroup() %>% 
+  filter(position_broad %in% c("CB")) %>% 
+  mutate(min_corrected = case_when(period_id==1 & minute >=45 ~45,
+                                   period_id ==2 & minute >=90~90,
+                                   .default = minute)) %>% 
+  group_by(position_broad, min_corrected, type) %>% 
+  summarise(N=n(),
+            xG=sum(xg_shooter, na.rm=T),
+            goals= sum(goal, na.rm=T),
+            time_played = sum(time_played),
+            .groups = "drop") %>% 
+  group_by(position_broad, type) %>% 
+  mutate(N_norm = N/max(N),
+         xg_norm=xG/max(xG),
+         goals_norm = goals/max(goals)) %>% 
+    #pivot_longer(c(xg_norm, goals_norm)) %>% 
+  ggplot(aes(x=min_corrected, y=xg_norm, fill = type)) +
+  geom_col()+
+  facet_wrap(~ type, scales = "free", ncol=1)+
+  theme_gplus_saira_light()+
+  theme(axis.text = element_markdown(size=10),
+        axis.title = element_markdown(size=12),
+        legend.position = "none",
+        plot.title=element_markdown(size=30),
+        plot.subtitle = element_markdown(size=14),
+        plot.caption = element_text(size=10),
+        panel.grid.major.x = element_blank())+
+    scale_x_continuous(breaks = c(0, 15, 30, 45, 60, 75, 90))+
+    scale_y_continuous(breaks = c(0, .5, 1))+
+  labs(x='<span style="color:#ff5a00">**Capped**</span> minute of game',
+       y ="Normalized xG per minute",
+       title = "When xG happens for center backs",
+       subtitle = 'All minutes played in MLS 2013-2024 for <span style="color:#04a3bd">**starters**</span> and <span style="color:#f0be3d">**substitutes**</span>'
+       ) +
+  scale_fill_manual(values = c(starter_color, sub_color))
+       
+```
+:::
+
+:::{#cr-shot_times_cb_gs}
+```{r}
+#| fig-width: 6
+#| fig-height: 8
+shot_times %>% 
+  ungroup() %>% 
+  filter(position_broad %in% c("CB")) %>% 
+  mutate(min_corrected = case_when(period_id==1 & minute >=45 ~45,
+                                   period_id ==2 & minute >=90~90,
+                                   .default = minute)) %>% 
+  group_by(position_broad, min_corrected, game_state, type) %>% 
+  summarise(N=n(),
+            xG=sum(xg_shooter, na.rm=T),
+            goals= sum(goal, na.rm=T),
+            time_played = sum(time_played),
+            .groups = "drop") %>% 
+  group_by(position_broad, type, game_state) %>% 
+  mutate(N_norm = N/max(N),
+         xg_norm=xG/max(xG),
+         goals_norm = goals/max(goals)) %>% 
+  ungroup() %>% 
+  mutate(gs_label = case_when(
+                              game_state == "="~ "Tied",
+                              game_state == "+1"~ "Winning by 1",
+                              game_state == "2+"~ "Winning by 2+",
+                              game_state == "-1"~ "Losing by 1",
+                              game_state == "-2+" ~ "Losing by 2+")) %>% 
+  mutate(
+         gs_label = fct_relevel(gs_label, "Losing by 2+", "Losing by 1", "Tied", "Winning by 1", "Winning by 2+")) %>% 
+  ggplot(aes(x=min_corrected, y=xg_norm, fill = type)) +
+  geom_col()+
+  facet_grid(gs_label~type, scales = "free")+
+  theme_gplus_saira_light()+
+  theme(axis.text = element_markdown(size=10),
+        axis.title = element_markdown(size=12),
+        legend.position = "none",
+        plot.title=element_markdown(size=30),
+        plot.subtitle = element_markdown(size=14),
+        plot.caption = element_text(size=10),
+        panel.grid.major.x = element_blank())+
+  scale_x_continuous(breaks = c(0, 15, 30, 45, 60, 75, 90))+
+  scale_y_continuous(breaks = c(0, .5, 1))+
+  labs(x='<span style="color:#ff5a00">**Capped**</span> minute of game',
+       y ="Normalized xG per minute",
+       title = "When xG happens for center backs",
+       subtitle = 'All minutes played in MLS 2013-2024 for <span style="color:#04a3bd">**starters**</span> and <span style="color:#f0be3d">**substitutes**</span> by game state'
+       ) +
+  scale_fill_manual(values = c(starter_color, sub_color))
+```
+
+:::
+
+:::{#cr-shot_times_st}
+```{r}
+#| fig-width: 6
+#| fig-height: 6
+
+shot_times %>% 
+  ungroup() %>% 
+  filter(position_broad %in% c("ST")) %>% 
+  mutate(min_corrected = case_when(period_id==1 & minute >=45 ~45,
+                                   period_id ==2 & minute >=90~90,
+                                   .default = minute)) %>% 
+  group_by(position_broad, min_corrected, type) %>% 
+  summarise(N=n(),
+            xG=sum(xg_shooter, na.rm=T),
+            goals= sum(goal, na.rm=T),
+            time_played = sum(time_played),
+            .groups = "drop") %>% 
+  group_by(position_broad, type) %>% 
+  mutate(N_norm = N/max(N),
+         xg_norm=xG/max(xG),
+         goals_norm = goals/max(goals)) %>% 
+    #pivot_longer(c(xg_norm, goals_norm)) %>% 
+  ggplot(aes(x=min_corrected, y=xg_norm, fill = type)) +
+  geom_col()+
+  facet_wrap(~ type, scales = "free", ncol=1)+
+  theme_gplus_saira_light()+
+  theme(axis.text = element_markdown(size=10),
+        axis.title = element_markdown(size=12),
+        legend.position = "none",
+        plot.title=element_markdown(size=30),
+        plot.subtitle = element_markdown(size=14),
+        plot.caption = element_text(size=10),
+        panel.grid.major.x = element_blank())+
+    scale_x_continuous(breaks = c(0, 15, 30, 45, 60, 75, 90))+
+  scale_y_continuous(breaks = c(0, .5, 1))+
+  labs(x='<span style="color:#ff5a00">**Capped**</span> minute of game',
+       y ="Normalized xG per minute",
+       title = "When xG happens for strikers",
+       subtitle = 'All minutes played in MLS 2013-2024 for <span style="color:#04a3bd">**starters**</span> and <span style="color:#f0be3d">**substitutes**</span>'
+       ) +
+  scale_fill_manual(values = c(starter_color, sub_color))
+       
+```
+:::
+
+:::{#cr-shot_times_st_gs}
+```{r}
+#| fig-width: 6
+#| fig-height: 8
+shot_times %>% 
+  ungroup() %>% 
+  filter(position_broad %in% c("ST")) %>% 
+  mutate(min_corrected = case_when(period_id==1 & minute >=45 ~45,
+                                   period_id ==2 & minute >=90~90,
+                                   .default = minute)) %>% 
+  group_by(position_broad, min_corrected, game_state, type) %>% 
+  summarise(N=n(),
+            xG=sum(xg_shooter, na.rm=T),
+            goals= sum(goal, na.rm=T),
+            time_played = sum(time_played),
+            .groups = "drop") %>% 
+  group_by(position_broad, type, game_state) %>% 
+  mutate(N_norm = N/max(N),
+         xg_norm=xG/max(xG),
+         goals_norm = goals/max(goals)) %>% 
+  ungroup() %>% 
+  mutate(gs_label = case_when(
+                              game_state == "="~ "Tied",
+                              game_state == "+1"~ "Winning by 1",
+                              game_state == "2+"~ "Winning by 2+",
+                              game_state == "-1"~ "Losing by 1",
+                              game_state == "-2+" ~ "Losing by 2+")) %>% 
+  mutate(
+         gs_label = fct_relevel(gs_label, "Losing by 2+", "Losing by 1", "Tied", "Winning by 1", "Winning by 2+")) %>% 
+  ggplot(aes(x=min_corrected, y=xg_norm, fill = type)) +
+  geom_col()+
+  facet_grid(gs_label~type, scales = "free")+
+  theme_gplus_saira_light()+
+  theme(axis.text = element_markdown(size=10),
+        axis.title = element_markdown(size=12),
+        legend.position = "none",
+        plot.title=element_markdown(size=30),
+        plot.subtitle = element_markdown(size=14),
+        plot.caption = element_text(size=10),
+        panel.grid.major.x = element_blank())+
+  scale_x_continuous(breaks = c(0, 15, 30, 45, 60, 75, 90))+
+  scale_y_continuous(breaks = c(0, .5, 1))+
+  labs(x='<span style="color:#ff5a00">**Capped**</span> minute of game',
+       y ="Normalized xG per minute",
+       title = "When xG happens for strikers",
+       subtitle = 'All minutes played in MLS 2013-2024 for <span style="color:#04a3bd">**starters**</span> and <span style="color:#f0be3d">**substitutes**</span> by game state'
+       ) +
+  scale_fill_manual(values = c(starter_color, sub_color))
+```
+
+:::
+
+:::{#cr-shot_times}
+```{r}
+#| fig-width: 6
+#| fig-height: 9
+
+
+shot_times %>% 
+  ungroup() %>% 
+  filter(position_broad != "GK") %>% 
+  mutate(min_corrected = case_when(period_id==1 & minute >=45 ~45,
+                                   period_id ==2 & minute >=90~90,
+                                   .default = minute)) %>% 
+  group_by(position_broad, min_corrected, type) %>% 
+  summarise(N=n(),
+            xG=sum(xg_shooter, na.rm=T),
+            goals= sum(goal, na.rm=T),
+            time_played = sum(time_played),
+            .groups = "drop") %>% 
+  group_by(position_broad, type) %>% 
+  mutate(N_norm = N/max(N),
+         xg_norm=xG/max(xG),
+         goals_norm = goals/max(goals)) %>% 
+    #pivot_longer(c(xg_norm, goals_norm)) %>% 
+  ungroup() %>% 
+  mutate(position_broad = fct_relevel(position_broad,  "CB","FB", "DM", "CM", "AM", "W", "ST")) %>% 
+  ggplot(aes(x=min_corrected, y=xg_norm, fill = type)) +
+  geom_col()+
+  facet_grid(position_broad ~ type, scales = "free")+
+theme_gplus_saira_light()+
+  theme(axis.text = element_markdown(size=10),
+        axis.title = element_markdown(size=12),
+        legend.position = "none",
+        plot.title=element_markdown(size=30),
+        plot.subtitle = element_markdown(size=14),
+        plot.caption = element_text(size=10),
+        panel.grid.major.x = element_blank())+
+    scale_x_continuous(breaks = c(0, 15, 30, 45, 60, 75, 90))+
+  scale_y_continuous(breaks = c(0, .5, 1))+
+  labs(x='<span style="color:#ff5a00">**Capped**</span> minute of game',
+       y ="Normalized xG per minute",
+       title = "When xG happens by position",
+       subtitle = 'All minutes played in MLS 2013-2024 for <span style="color:#04a3bd">**starters**</span> and <span style="color:#f0be3d">**substitutes**</span>'
+       ) +
+  scale_fill_manual(values = c(starter_color, sub_color))
+       
+```
+:::
+
+Given that the role of a center back is primarily defensive, they do not score many goals or generate much xG. @cr-pos_gs_cb
+
+When teams are trailing, center backs generate about twice as much xG when subbed on in losing game states and also show an increase in goals scored - both consistent with a team chasing the game by throwing players forward. @cr-pos_gs_cb
+
+When center backs are subbed on in winning game states, they score fewer goals and generate fewer expected goals - as you might expect from a team trying to keep a lead. @cr-pos_gs_cb
+
+In either case, there is very little difference between [*per 90'*]{style="color:#ff5a00"} and [*per 96'*]{style="color:#007bdd"} accounting methods. @cr-pos_gs_cb
+
+The reason for this is that by far the highest amount of xG generated by center backs is in second half stoppage time. The xG created after 90' dwarfs that of any other minute played, being over twice as high as the xG created in first half stoppage time for both [**starters**]{style="color:#04a3bd"}, and [**substitutes**]{style="color:#f0be3d"}.  @cr-shot_times_cb
+
+Overall, because of this discrepancy, the [*per 96'*]{style="color:#007bdd"} accounting breaks down as center backs that are [**substituted**]{style="color:#f0be3d"} on are essentially enriched for high xG parts of the game, swamping any beneficial normalization effect for using <span style="color:#007bdd">**expanded minutes**</span>. @cr-shot_times_cb
+
+When adding in game state, it is clear that we see the enriched xG effect in second half stoppage time when teams are losing, and to a lesser extent when tied. We see a decrease in xG generated in second half stoppage time when teams are winning.  @cr-shot_times_cb_gs
+
+This explains why [*per 96'*]{style="color:#007bdd"} normalization fails to correct for [**substitution**]{style="color:#f0be3d"} effects when teams are losing, which propagates to the overall picture for center backs that we saw earlier. @cr-pos_gs_cb
+
+Moving on to strikers, we see an opposite trend compared to center backs. Substitute strikers tend to have higher goals and expected goals on a [*per 90'*]{style="color:#ff5a00"} basis when a team is winning.  @cr-pos_gs_st
+
+However, when using a [*per 96'*]{style="color:#007bdd"} normalization method, the difference between [**starters**]{style="color:#04a3bd"} and [**substitutes**]{style="color:#f0be3d"} as well as that of game state largely disappears. @cr-pos_gs_st
+
+The difference between center backs and strikers is that shooters shoot. Strikers have two large peaks corresponding to both halves of stoppage time, rather than just the one for center backs. As such, there isn't an asymmetry of attacking stats based upon if a player is on the field in first or second half stoppage time.  @cr-shot_times_st
+
+Similarly, when you add in game state, starters retain the xG peaks in both stoppage times and it doesn't dissapear when teams are winning like with center backs. @cr-shot_times_st_gs
+
+This emphasizes that when assessing primarily attacking players, normalizing using a [*per 96'*]{style="color:#007bdd"} method is crucial to remove substitution effects. @cr-pos_gs_st
+
+Bringing this back around for all positions, those that have a larger peak in first half stoppage time than second half stoppage time, i.e. attackers, for [**starters**]{style="color:#04a3bd"} are the positions where [*per 96'*]{style="color:#007bdd"} normalization is able to correct for substitution effects. For defenders and center midfielders, the increased xG in second half stoppage time is too strong. @cr-shot_times
+
+While I haven't shown other statistics such as shots, key passes, and assists, they show a similar pattern to goals and expected goals. @cr-shot_times
+
+::::
+
+## Ilsinho {.column-page-left}
+
+One player sums up the issues with the substitution effect and consequences of using different normalization methods: Philadelphia Union legend Ilsinho. 
+
+Never a minute eater, Ilsinho never played more than 1,500 regular season minutes in his decade long career prior to joining Philly.  
+ 
+
+```{r}
+#| fig-width: 12
+#| fig-height: 7
+
+goal_differences_season_player = readRDS("/Users/etmckinley/Library/CloudStorage/GoogleDrive-etmckinley@gmail.com/My Drive/R Projects/ASA DB/Articles/expanded mins and subs/goal_differences_season_player.rds")
+
+goal_differences_season_player %>% 
+  filter(player_name == "Ilsinho") %>% 
+  pivot_longer(cols = c(goals_90, goals_96, xg_90, xg_96, assists_90, xa_90, assists_96, xa_96)) %>% 
+  mutate(label = case_when(str_detect(name,"goals_") ~"Goals",
+                           str_detect(name, "xg")~ "Expected Goals",
+                           str_detect(name, "assists_") ~ "Assists",
+                           str_detect(name, "xa_")~ "Expected Assists",
+                           str_detect(name, "shots_on")~ "Shots on Target",
+                           str_detect(name, "shots_")~ "Shots",
+                           str_detect(name, "kp_") ~ "Key Passes")) %>% 
+  mutate(exp = case_when(str_detect(name,"goals_90") | name =="assists_90" | name =="kp_90" | name =='shots_90' | name=='shots_on_target_90' ~"per 90'",
+                         str_detect(name,"goals_96") | name == "assists_96" | name =="kp_96" | name =='shots_96' | name=='shots_on_target_96'~"per 96'",
+                         str_detect(name,"goals_season") | name == "assists_season" | name =="kp_season" | name =='shots_season' | name=='shots_on_target_season' ~"Actual per season'",
+                         str_detect(name, "xg_90") | name == "xa_90" ~ "per 90'",
+                         str_detect(name, "xg_96") | name == "xa_96"~ "per 96'",
+                         str_detect(name, "xg_season") | name == "xa_season"~ "Expected per season'")) %>%
+  mutate(min_type = case_when(str_detect(name,"_90")~"per 90'",
+                              str_detect(name,"_96")~"per 96'",
+                              str_detect(name,"_season")~"per season'"),
+         label = fct_relevel(label, "Goals", "Expected Goals","Assists", "Expected Assists")) %>% 
+  ggplot(aes(x=season_id, y=value, color=min_type)) + 
+  geom_path(linewidth=2)+
+  geom_point(size=4)+
+  scale_color_manual(values= c("#ff5a00","#007bdd" ))+
+  theme_gplus_saira_light()+
+  theme(axis.text = element_markdown(size=10),
+        axis.title = element_markdown(size=12),
+        legend.position = "none",
+        plot.title=element_markdown(size=30),
+        plot.subtitle = element_markdown(size=14),
+        plot.caption = element_text(size=10),
+        panel.grid.major.x = element_blank())+
+  facet_wrap(~label, nrow=2)+
+  labs(title= 'When Ilsinho became a super sub his <span style="color:#ff5a00">*per 90\'*</span> and <span style="color:#007bdd">*per 96\'*</span> stats diverged',
+       subtitle = 'Seasons with more than 500 <span style="color:#ff5a00">**capped minutes**</span> played',
+       x="",
+       y="")
+
+```
+In his first two seasons with the Union, he was a regular starter when available, however 90% of the time was subbed out prior to second half stoppage time. While this isn't especially rare for attacking players, it did result in Ilsinho having the rare distinction of having slightly higher [*per 96'*]{style="color:#007bdd"} stats than [*per 90'*]{style="color:#ff5a00"} in 2017. His 1,850 regular season minutes were a career high in 2017, but as he rarely made it to  second half stoppage time, he never collected the boost that comes with [**capped mintute**]{style="color:#ff5a00"} accounting.
+
+As Ilsinho transitioned into a super sub role starting in 2018 (40% of minutes as a sub) his [*per 96'*]{style="color:#007bdd"} began to be noticeably below his [*per 90'*]{style="color:#ff5a00"} stats. This reached it's final form in 2019 (60% of minutes as a sub) and 2020 (80% of minutes as a sub) where his [*per 90'*]{style="color:#ff5a00"} and [*per 96'*]{style="color:#007bdd"} stats diverged by 5% and 11%, respectively. He also scored far more than his xG would predict, cementing his legendary MLS super sub status.
+
+## The Atalanta Effect and Tom Barlow
+
+Building on the work of [Michael Caley](https://www.expectinggoals.com/p/substitute-effects-study-part-i), [J. Sam Jones](https://bsky.app/profile/revenueminuscosts.bsky.social) recently wrote about some possible concerns with Aleksei Miranchuk's signing for Atlanta United being driven by [substitution effects](https://www.fivestripefinal.com/p/substitute-effects-and-the-dangers). In a followup, Jones discovered a phenomenon dubbed the [Atalanta Effect](https://www.fivestripefinal.com/p/worrying-about-miranchuk-pt-2-the), whereby players from Atalanta got a "statistical steroid" by playing for a relentlessly attacking team that was also potentially boosted by substitution effects. A litany of Atalanta players' stats were shown as being seemingly world beaters while playing in Bergamo, but as mostly average somewhere else. 
+
+I'll more generally define the Atlanta Effect as the inflation of [*per 90'*]{style="color:#ff5a00"} statistics observed when playing for a team that is generally better or more attacking than average compounded by being used as a substitute. Any club acquiring such players should be wary that attacking output for this player may not continue for your club. 
+
+While MLS' parity prevents players from fully attaining the Atalanta Effect by playing for a far and away better team others in the league, the effect can still be significant for substitutes. All the players shown previously as having large differences in [**capped minutes**]{style="color:#ff5a00"} and [*expanded minutes*]{style="color:#007bdd"} also show an approximately 20% boost in goals and expected goals using [*per 90'*]{style="color:#ff5a00"} stats versus [*per 96'*]{style="color:#007bdd"}.
+
+
+:::: {.cr-section layout="sidebar-right"}
+For example, in 2024, Tom Barlow's played 733 [**capped minutes**]{style="color:#ff5a00"} and 941 [*expanded minutes*]{style="color:#007bdd"} for an objectively bad Chicago Fire team. @cr-barlow_only
+
+Barlow appeared in 28 games in 2024, with only 5 starts — 4 of which he was subbed off before the 80th minute, thus missing the second half stoppage time. Overall, 53% of his [*expanded minutes*]{style="color:#007bdd"} came as a [**substitute**]{style="color:#f0be3d"} @cr-barlow_only
+
+Barlow's [*per 90'*]{style="color:#ff5a00"} xG is on par with a couple of MVP candidates, Cucho Hernandez and Chicho Arango. @cr-barlow_cucho
+
+However, his [*per 96'*]{style="color:#007bdd"} xG was equivalent to Patrick Agyemang or Elias Manoel. @cr-barlow_ag
+
+Not that having Patrick Agyemang and Elias Manoel as peers - albeit with 1,000 fewer minutes- is bad, but it puts the differences in [*per 90'*]{style="color:#ff5a00"} and [*per 96'*]{style="color:#007bdd"} into context. @cr-barlow_all
+
+
+:::{#cr-barlow_only}
+```{r}
+#| fig-width: 6
+#| fig-height: 6
+#|
+goal_differences_season_player %>% 
+  filter(season_id == 2024,
+         mins >700) %>% 
+  pivot_longer(cols = c(xg_90, xg_96)) %>% 
+  mutate(label = case_when(player_name=="Tom Barlow"~"Barlow",
+                           #player_name == "Cucho Hernández"~ "Cucho",
+                           #player_name == "Cristian Arango"~"Chicho",
+                           #player_name == "Patrick Agyemang"~"Agyemang",
+                           #player_name == "Elias Manoel"~"Manoel",
+                           .default = "Z"),
+         name = case_when(name == "xg_90"~ 'Expected Goals <span style="color:#ff5a00">*per 90\'*</span>',
+                        name == "xg_96" ~ 'Expected Goals <span style="color:#007bdd">*per 96\'*</span>'),
+         name = fct_relevel(name, 'Expected Goals <span style="color:#ff5a00">*per 90\'*</span>', 'Expected Goals <span style="color:#007bdd">*per 96\'*</span>')) %>% 
+  ungroup() %>% 
+  arrange(label) %>% 
+  ggplot(aes(x = name, y=value, color = label, alpha= label, size=label))+
+  geom_point(position = position_jitter(width=0.3, seed = 2))+
+  scale_color_manual(values = c("#D50032", "black" ))+
+  scale_alpha_manual(values = c(1,0.05))+
+  scale_size_manual(values = c(2.5, 1.5))+
+  theme_gplus_saira_light()+
+  theme(axis.text = element_markdown(size=14),
+        axis.title = element_markdown(size=12),
+        legend.position = "none",
+        plot.title=element_markdown(size=26),
+        plot.subtitle = element_markdown(size=14),
+        plot.caption = element_text(size=10),
+        panel.grid.major.x = element_blank())+
+  labs(title = '<span style="color:#D50032">**Tom Barlow\'s**</span> <span style="color:#ff5a00">*per 90\'*</span> xG is among the elite.<br>His <span style="color:#007bdd">*per 96\'*</span> xG is merely pretty good.',
+       subtitle = 'Minimum 700 minutes in 2024<br> ',
+       y="",
+       x="")
+```
+:::
+
+:::{#cr-barlow_cucho}
+```{r}
+#| fig-width: 6
+#| fig-height: 6
+#|
+goal_differences_season_player %>% 
+  filter(season_id == 2024,
+         mins >700) %>% 
+  pivot_longer(cols = c(xg_90, xg_96)) %>% 
+  mutate(label = case_when(player_name=="Tom Barlow"~"Barlow",
+                           player_name == "Cucho Hernández"~ "Cucho",
+                           player_name == "Cristian Arango"~"Chicho",
+                           #player_name == "Patrick Agyemang"~"Agyemang",
+                           #player_name == "Elias Manoel"~"Manoel",
+                           .default = "Z"),
+         name = case_when(name == "xg_90"~ 'Expected Goals <span style="color:#ff5a00">*per 90\'*</span>',
+                        name == "xg_96" ~ 'Expected Goals <span style="color:#007bdd">*per 96\'*</span>'),
+         name = fct_relevel(name, 'Expected Goals <span style="color:#ff5a00">*per 90\'*</span>', 'Expected Goals <span style="color:#007bdd">*per 96\'*</span>')) %>% 
+  ungroup() %>% 
+  arrange(label) %>% 
+  ggplot(aes(x = name, y=value, color = label, alpha= label, size=label))+
+  geom_point(position = position_jitter(width=0.3, seed = 2))+
+  scale_color_manual(values = c("#D50032", "#7a0526", "#baa40b", "black" ))+
+  scale_alpha_manual(values = c(1,1,1, 0.05))+
+  scale_size_manual(values = c(2.5, 2.5, 2.5, 1.5))+
+  theme_gplus_saira_light()+
+  theme(axis.text = element_markdown(size=14),
+        axis.title = element_markdown(size=12),
+        legend.position = "none",
+        plot.title=element_markdown(size=26),
+        plot.subtitle = element_markdown(size=14),
+        plot.caption = element_text(size=10),
+        panel.grid.major.x = element_blank())+
+  labs(title = '<span style="color:#D50032">**Tom Barlow\'s**</span> <span style="color:#ff5a00">*per 90\'*</span> xG is among the elite.<br>His <span style="color:#007bdd">*per 96\'*</span> xG is merely pretty good.',
+       subtitle = 'Minimum 700 minutes in 2024<br>Compared to <span style="color:#baa40b">**Cucho Hernández**</span> and <span style="color:#7a0526">**Chicho Arango**</span>',
+       y="",
+       x="")
+```
+:::
+
+:::{#cr-barlow_ag}
+```{r}
+#| fig-width: 6
+#| fig-height: 6
+#|
+goal_differences_season_player %>% 
+  filter(season_id == 2024,
+         mins >700) %>% 
+  pivot_longer(cols = c(xg_90, xg_96)) %>% 
+  mutate(label = case_when(player_name=="Tom Barlow"~"Barlow",
+                           #player_name == "Cucho Hernández"~ "Cucho",
+                           #player_name == "Cristian Arango"~"Chicho",
+                           player_name == "Patrick Agyemang"~"Agyemang",
+                           player_name == "Elias Manoel"~"Manoel",
+                           .default = "Z"),
+         name = case_when(name == "xg_90"~ 'Expected Goals <span style="color:#ff5a00">*per 90\'*</span>',
+                        name == "xg_96" ~ 'Expected Goals <span style="color:#007bdd">*per 96\'*</span>'),
+         name = fct_relevel(name, 'Expected Goals <span style="color:#ff5a00">*per 90\'*</span>', 'Expected Goals <span style="color:#007bdd">*per 96\'*</span>')) %>% 
+  ungroup() %>% 
+  arrange(label) %>% 
+  ggplot(aes(x = name, y=value, color = label, alpha= label, size=label))+
+  geom_point(position = position_jitter(width=0.3, seed = 2))+
+  scale_color_manual(values = c("#0085CA", "#D50032", "#23326A", "black" ))+
+  scale_alpha_manual(values = c(1,1,1, 0.05))+
+  scale_size_manual(values = c(2.5, 2.5, 2.5, 1.5))+
+  theme_gplus_saira_light()+
+  theme(axis.text = element_markdown(size=14),
+        axis.title = element_markdown(size=12),
+        legend.position = "none",
+        plot.title=element_markdown(size=26),
+        plot.subtitle = element_markdown(size=14),
+        plot.caption = element_text(size=10),
+        panel.grid.major.x = element_blank())+
+  labs(title = '<span style="color:#D50032">**Tom Barlow\'s**</span> <span style="color:#ff5a00">*per 90\'*</span> xG is among the elite.<br>His <span style="color:#007bdd">*per 96\'*</span> xG is merely pretty good.',
+       subtitle = 'Minimum 700 minutes in 2024<br>Compared to <span style="color:#0085CA">**Patrick Agyemang**</span> and <span style="color:#23326A">**Elias Manoel**</span>',
+       y="",
+       x="")
+```
+:::
+
+
+:::{#cr-barlow_all}
+```{r}
+#| fig-width: 6
+#| fig-height: 6
+#|
+goal_differences_season_player %>% 
+  filter(season_id == 2024,
+         mins >700) %>% 
+  pivot_longer(cols = c(xg_90, xg_96)) %>% 
+  mutate(label = case_when(player_name=="Tom Barlow"~"Barlow",
+                           player_name == "Cucho Hernández"~ "Cucho",
+                           player_name == "Cristian Arango"~"Chicho",
+                           player_name == "Patrick Agyemang"~"Agyemang",
+                           player_name == "Elias Manoel"~"Manoel",
+                           .default = "Z"),
+         name = case_when(name == "xg_90"~ 'Expected Goals <span style="color:#ff5a00">*per 90\'*</span>',
+                        name == "xg_96" ~ 'Expected Goals <span style="color:#007bdd">*per 96\'*</span>'),
+         name = fct_relevel(name, 'Expected Goals <span style="color:#ff5a00">*per 90\'*</span>', 'Expected Goals <span style="color:#007bdd">*per 96\'*</span>')) %>% 
+  ungroup() %>% 
+  arrange(label) %>% 
+  ggplot(aes(x = name, y=value, color = label, alpha= label, size=label))+
+  geom_point(position = position_jitter(width=0.3, seed = 2))+
+  scale_color_manual(values = c("#0085CA", "#D50032", "#7a0526", "#baa40b","#23326A", "black" ))+
+  scale_alpha_manual(values = c(1,1,1,1,1,0.05))+
+  scale_size_manual(values = c(2.5, 2.5, 2.5, 2.5, 2.5, 1.5))+
+  theme_gplus_saira_light()+
+  theme(axis.text = element_markdown(size=14),
+        axis.title = element_markdown(size=12),
+        legend.position = "none",
+        plot.title=element_markdown(size=26),
+        plot.subtitle = element_markdown(size=14),
+        plot.caption = element_text(size=10),
+        panel.grid.major.x = element_blank())+
+  labs(title = '<span style="color:#D50032">**Tom Barlow\'s**</span> <span style="color:#ff5a00">*per 90\'*</span> xG is among the elite.<br>His <span style="color:#007bdd">*per 96\'*</span> xG is merely pretty good.',
+       subtitle = 'Minimum 700 minutes in 2024<br>Compared to <span style="color:#baa40b">**Cucho Hernández**</span>, <span style="color:#7a0526">**Chicho Arango**</span>, <span style="color:#0085CA">**Patrick Agyemang**</span>, and <span style="color:#23326A">**Elias Manoel**</span>',
+       y="",
+       x="")
+```
+:::
+
+:::{#cr-barlows}
+```{r}
+#| fig-width: 6
+#| fig-height: 6
+#|
+goal_differences_season_player %>% 
+  filter(season_id == 2024,
+         mins >700) %>% 
+  pivot_longer(cols = c(xg_90, xg_96)) %>% 
+  mutate(label = case_when(player_name=="Tom Barlow"~"Barlow",
+                           player_name == "Cucho Hernández"~ "Cucho",
+                           player_name == "Cristian Arango"~"Chicho",
+                           player_name == "Patrick Agyemang"~"Agyemang",
+                           player_name == "Elias Manoel"~"Manoel",
+                           .default = "Z"),
+         name = case_when(name == "xg_90"~ 'Expected Goals <span style="color:#ff5a00">*per 90\'*</span>',
+                        name == "xg_96" ~ 'Expected Goals <span style="color:#007bdd">*per 96\'*</span>'),
+         name = fct_relevel(name, 'Expected Goals <span style="color:#ff5a00">*per 90\'*</span>', 'Expected Goals <span style="color:#007bdd">*per 96\'*</span>')) %>% 
+  ungroup() %>% 
+  arrange(label) %>% 
+  ggplot(aes(x = name, y=value, color = label, alpha= label, size=label))+
+  geom_jitter(width=0.3)+
+  scale_color_manual(values = c("#0085CA", "#D50032", "#7a0526", "#baa40b","#23326A", "black" ))+
+  scale_alpha_manual(values = c(1,1,1,1,1,0.05))+
+  scale_size_manual(values = c(2.5, 2.5, 2.5, 2.5, 2.5, 1.5))+
+  theme_gplus_saira_light()+
+  theme(axis.text = element_markdown(size=14),
+        axis.title = element_markdown(size=12),
+        legend.position = "none",
+        plot.title=element_markdown(size=26),
+        plot.subtitle = element_markdown(size=14),
+        plot.caption = element_text(size=10),
+        panel.grid.major.x = element_blank())+
+  labs(title = 'This is a test',
+       subtitle = 'Minimum 700 minutes in 2024<br><span style="color:#baa40b">**Cucho Hernández**</span>, <span style="color:#7a0526">**Chicho Arango**</span>, <span style="color:#0085CA">**Patrick Agyemang**</span>, and <span style="color:#23326A">**Elias Manoel**</span> shown',
+       y="",
+       x="")
+```
+:::
+::::
+
+For what it's worth, the Atalanta Effect hit Miranchuk hard in his first half season in Atlanta. While his attacking stats via FBRef in his [final season with Atalanta](https://fbref.com/en/players/a9aa0d1d/scout/12229/Aleksei-Miranchuk-Scouting-Report) were in the 98th percentile, they mostly fell below average in Atlanta. Perhaps Miranchuk is a victim of the first season of the [David Gass Theorem](https://www.mlssoccer.com/news/way-too-early-2022-mls-mvp-candidates-sorted-by-tier) (i.e. it takes a year for players to adjust to MLS) - which, by the way, someone should investigate if it actually exists.
+
+## Conclusions {.page-columns .page-full}
+
+OK, that was a lot of scrollytelling, but what have we learned?
+
+* MLS games are getting longer.
+
+* Longer games have caused the difference between [**capped mintutes**]{style="color:#ff5a00"} and [**expanded minutes**]{style="color:#007bdd"} to grow, especially for [**substitutes**]{style="color:#f0be3d"}.
+
+* [**Substitutes**]{style="color:#f0be3d"} have higher per minute stats than [**starters**]{style="color:#04a3bd"} no matter how you count minutes. 
+
+* [*Per 96'*]{style="color:#007bdd"} stats correct for substitution effects for attackers, but not other positions. This is due to a combination of game state effects on attacking stats and an even spread of offensive production in first and second half stoppage time for attackers that is not present for other positions.
+
+* When scouting players, you need to be aware of all of these factors and more to not get burned by the Atalanta Effect.
+
+There is plenty more to be mined from looking at how minutes are counted and substitution effects. For example, I did not consider home advantage, which is larger in MLS than any other league. As with many things in soccer, these results may vary when looking at more unequal leagues such as those in Europe. 
+
+Regardless, don't be fooled by [*per 90'*]{style="color:#ff5a00"} that are commonly found online, they may not tell the whole story.
+
+\
+
+# {#info}
+
+This article was written with [Quarto](https://quarto.org), [closeread](https://closeread.netlify.app), and [R](https://www.r-project.org) based off of the work of [Matthias Schnetzer](https://github.com/mschnetzer/scrollytell_arbeitszeit)
+
+\
+
+For more, find me at [eliotmckinley.com](https://eliotmckinley.com) and on Bluesky [@eliotmckinley.com](https://bsky.app/profile/eliotmckinley.com) 
